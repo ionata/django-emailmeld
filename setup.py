@@ -9,9 +9,8 @@ setup(
     author_email='spam@ionata.com.au',
     url='http://github.com/ionata/django-emailmeld',
     packages = find_packages(exclude=['project',]),
-    dependency_links = [
-    ],
     install_requires = [
+        'markdown'
     ],
     include_package_data=True,
     classifiers=[
