@@ -4,7 +4,7 @@ setup(
     name='django-emailmeld',
     version='0.0.1',
     description='Django Email Templater.',
-    long_description = open( 'README.md', 'r').read() + open('AUTHORS.md', 'r').read() + open('CHANGELOG.md', 'r').read(),
+    long_description = open( 'README.md', 'r').read() + open('AUTHORS.rst', 'r').read() + open('CHANGELOG.rst', 'r').read(),
     author='Thomas',
     author_email='spam@ionata.com.au',
     url='http://github.com/ionata/django-emailmeld',
