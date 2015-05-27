@@ -1,14 +1,16 @@
+from operator import attrgetter
+import re
+
 from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.mail.message import EmailMultiAlternatives
 from django.db import models
 from django.template.base import Template
 from django.template.context import Context
+from django.template.engine import Engine
 from django.template.loaders.eggs import Loader
 from django.utils.encoding import smart_unicode
 from markdown import markdown
-from operator import attrgetter
-import re
 
 
 class EmailMeldBase(object):
@@ -110,7 +112,8 @@ class EmailMeldBase(object):
         except ValueError:
             raise NotImplementedError("EmailMeldBase implementation template file must end with a supported file extension, ie .html .txt .md")
 
-        template_source = Loader().load_template_source(self.template)[0]
+        engine = Engine.get_default()
+        template_source = Loader(engine).load_template_source(self.template)[0]
         subject = template_source.split("\n")[0]
 
         if template_source.startswith(subject + "\n\n"):
@@ -178,5 +181,5 @@ class EmailMeldModel(models.Model):
     subject = models.CharField(max_length=255)
     body = models.TextField()
 
-    def  __unicode__(self):
+    def __unicode__(self):
         return smart_unicode(self.subject)
