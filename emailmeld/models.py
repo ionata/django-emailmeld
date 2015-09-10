@@ -8,23 +8,28 @@ from django.db import models
 from django.template.base import Template
 from django.template.context import Context
 from django.template.engine import Engine
-from django.template.loaders.eggs import Loader
-from django.utils.encoding import smart_unicode
+from django.template import TemplateDoesNotExist
+from django.utils.encoding import python_2_unicode_compatible, smart_text
 from markdown import markdown
 
 
 class EmailMeldBase(object):
-
-    request_attrs = {
-    }
+    """Base class for creating emails.
+        Minimum implementation = overriding, adding a 'template' attribute
+        which points at a md/html/txt file template"""
+    request_attrs = {}
     use_base_template = True
+    use_database = True
+    urls_resolved = False
+    template = None
 
     def __init__(self, payload, request=None, force_update=False):
         self.payload = payload
-        try:
-            self.payload['site'] = Site.objects.get_current()
-        except Site.DoesNotExist:
-            self.payload['site'] = ""
+        if 'site' not in self.payload:
+            try:
+                self.payload['site'] = Site.objects.get_current()
+            except Site.DoesNotExist:
+                self.payload['site'] = ""
         self.payload['STATIC_URL'] = settings.STATIC_URL
         self.payload['has_request_attrs'] = True if request is not None else False
 
@@ -32,8 +37,13 @@ class EmailMeldBase(object):
             for key, attr in self.request_attrs.items():
                 payload[key] = attrgetter(attr)(request)
 
-        if not hasattr(self, 'template'):
-            raise NotImplementedError("EmailMeldBase implementation requires a valid self.template property to a django template file path location")
+        if self.template is None:
+            raise NotImplementedError(
+                "EmailMeldBase implementation requires a valid self.template "
+                "property to a django template file path location")
+
+        if not self.use_database:
+            return
 
         if force_update or getattr(settings, 'EMAILMELD_FORCE_UPDATE', False):
             self.meld = self.create_or_update()
@@ -44,6 +54,7 @@ class EmailMeldBase(object):
             self.meld = self.create_or_update()
 
     def prepare_email(self, recipient_list, from_email=None):
+        """From the recipient list, create an email"""
         from_email = from_email or settings.DEFAULT_FROM_EMAIL
         subject = self.get_subject()
 
@@ -65,62 +76,107 @@ class EmailMeldBase(object):
         return message.send()
 
     def render_html(self):
-        if self.meld.email_type not in ['html', 'md']:
+        """Return rendered HTML if the email is html or md"""
+        if self.get_email_type() not in ['html', 'md']:
             return None
 
         # render content and fix urls/emails
-        t = self.get_template()
-        t = Template(t)
-        t = t.render(Context(self.payload))
-        t = self.fix_urls(t)
-        if self.meld.email_type == 'md':
-            t = markdown(t)
+        template = self.get_template()
+        template = Template(template)
+        template = template.render(Context(self.payload))
+        if not self.urls_resolved:
+            template = self.fix_urls(template)
+        if self.get_email_type() == 'md':
+            template = markdown(template)
         self.payload['site'] = Site.objects.get_current()
 
         if not self.use_base_template:
-            return t
+            return template
 
-        b = "{{% extends '{base_template}' %}}{{% block {block_name} %}}\n{template}\n{{% endblock %}}".format(
+        base_template = (
+            "{{% extends '{base_template}' %}}{{% block {block_name} %}}\n"
+            "{template}\n"
+            "{{% endblock %}}"
+        ).format(
             base_template=settings.EMAILMELD_BASE_TEMPLATE,
             block_name="content",
-            template=t,
+            template=template,
         )
 
-        b = Template(b)
-        b = b.render(Context(self.payload))
+        base_template = Template(base_template)
+        base_template = base_template.render(Context(self.payload))
 
-        return b
+        return base_template
 
     def render_text(self):
-        if self.meld.email_type == 'html':
+        """Return the text rendering if the filetype is md or txt"""
+        if self.get_email_type() == 'html':
             return None
 
-        t = Template(self.get_template())
-        return t.render(Context(self.payload))
+        template = Template(self.get_template())
+        return template.render(Context(self.payload))
 
     def get_subject(self):
-        subject = getattr(settings, 'EMAILMELD_SUBJECT_PREFIX', '') + self.meld.subject
-        t = Template(subject)
-        return t.render(Context(self.payload))
+        """Return either the in-database subject, or the subject from the template"""
+        if self.use_database:
+            base_subject = self.meld.subject
+        else:
+            base_subject = self.partition_template_string(self.get_template_string())[0]
+        subject = getattr(settings, 'EMAILMELD_SUBJECT_PREFIX', '') + base_subject
+        template = Template(subject)
+        return template.render(Context(self.payload))
 
     def get_template(self):
-        return self.meld.body
+        """Return either the in-database template, or the on-disk one"""
+        if self.use_database:
+            return self.meld.body
+        return self.partition_template_string(self.get_template_string())[1]
 
-    def create_or_update(self):
+    def get_template_string(self):
+        """Use the same logic as django uses for getting a compiled template
+            to get the contents"""
+        engine = Engine.get_default()
+        for loader in engine.template_loaders:
+            try:
+                try:
+                    template_string = loader.get_contents(self.template)
+                except AttributeError:  # Pre-1.9 compatibility
+                    template_string = loader.load_template_source(self.template)[0]
+                return template_string
+            except TemplateDoesNotExist:
+                pass
+        raise TemplateDoesNotExist(self.template)
+
+    @staticmethod
+    def partition_template_string(template_string):
+        """Splits a template string into subject and body"""
+        subject = template_string.split("\n")[0]
+        if template_string.startswith(subject + "\n\n"):
+            # clean up a empty line after subject
+            body = template_string.partition(subject + "\n\n")[2]
+        else:
+            body = template_string.partition(subject + "\n")[2]
+        return subject, body
+
+    def get_email_type(self, initial=False):
+        """Determine the filetype of the template from the extension.
+            Cached in DB, use initial=True to bypass"""
+        if self.use_database and not initial:
+            return self.meld.email_type
         try:
             email_type = self.template.split('.')[-1]
         except ValueError:
-            raise NotImplementedError("EmailMeldBase implementation template file must end with a supported file extension, ie .html .txt .md")
+            raise NotImplementedError(
+                "EmailMeldBase implementation template file must end with a "
+                "supported file extension, ie .html .txt .md")
+        return email_type
 
-        engine = Engine.get_default()
-        template_source = Loader(engine).load_template_source(self.template)[0]
-        subject = template_source.split("\n")[0]
-
-        if template_source.startswith(subject + "\n\n"):
-            # clean up a empty line after subject
-            body = template_source.partition(subject + "\n\n")[2]
-        else:
-            body = template_source.partition(subject + "\n")[2]
+    def create_or_update(self):
+        """Create or update a meld with the template name that corresponds to
+            the template attribute"""
+        email_type = self.get_email_type(initial=True)
+        template_source = self.get_template_string()
+        subject, body = self.partition_template_string(template_source)
 
         meld = EmailMeldModel.objects.get_or_create(
             template=self.template,
@@ -133,7 +189,9 @@ class EmailMeldBase(object):
 
         return meld
 
-    def fix_urls(self, text):
+    @staticmethod
+    def fix_urls(text):
+        """Add href / mailto to urls"""
         pat_url = re.compile(r'''
                          (?x)( # verbose identify URLs within text
              (http|https|ftp|gopher) # make sure we find a resource type
@@ -166,8 +224,9 @@ class EmailMeldBase(object):
         return text
 
 
+@python_2_unicode_compatible
 class EmailMeldModel(models.Model):
-
+    """The actual in-database format"""
     # maps to template file extension
     EMAIL_TYPE_CHOICES = (
         ("txt", "Text"),
@@ -181,5 +240,5 @@ class EmailMeldModel(models.Model):
     subject = models.CharField(max_length=255)
     body = models.TextField()
 
-    def __unicode__(self):
-        return smart_unicode(self.subject)
+    def __str__(self):
+        return smart_text(self.subject)
