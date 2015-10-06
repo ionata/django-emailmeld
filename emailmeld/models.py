@@ -7,7 +7,12 @@ from django.core.mail.message import EmailMultiAlternatives
 from django.db import models
 from django.template.base import Template
 from django.template.context import Context
-from django.template.engine import Engine
+try:
+    from django.template.engine import Engine
+except ImportError:
+    Engine = None
+    from django.template.loaders.eggs import Loader
+
 from django.template import TemplateDoesNotExist
 from django.utils.encoding import python_2_unicode_compatible, smart_text
 from markdown import markdown
@@ -22,6 +27,7 @@ class EmailMeldBase(object):
     use_database = True
     urls_resolved = False
     template = None
+    template_tags = ['tz']
 
     def __init__(self, payload, request=None, force_update=False):
         self.payload = payload
@@ -32,6 +38,9 @@ class EmailMeldBase(object):
                 self.payload['site'] = ""
         self.payload['STATIC_URL'] = settings.STATIC_URL
         self.payload['has_request_attrs'] = True if request is not None else False
+
+        # get the timezone for wrapping this email template
+        self.timezone = self.payload.get('emailmeld_timezone', getattr(settings, 'EMAILMELD_TIMEZONE', 'UTC'))
 
         if request:
             for key, attr in self.request_attrs.items():
@@ -129,22 +138,35 @@ class EmailMeldBase(object):
     def get_template(self):
         """Return either the in-database template, or the on-disk one"""
         if self.use_database:
-            return self.meld.body
-        return self.partition_template_string(self.get_template_string())[1]
+            template = self.meld.body
+        else:
+            template = self.partition_template_string(self.get_template_string())[1]
+
+        # wrap the template in timezone aware tags
+        template = u"{{% load {template_tags} %}}{{% timezone \"{timezone}\" %}}{body}{{% endtimezone %}}".format(
+            template_tags=" ".join(self.template_tags),
+            body=self.meld.body,
+            timezone=self.timezone,
+        )
+
+        return template
 
     def get_template_string(self):
         """Use the same logic as django uses for getting a compiled template
             to get the contents"""
-        engine = Engine.get_default()
-        for loader in engine.template_loaders:
-            try:
+        if Engine is not None:
+            engine = Engine.get_default()
+            for loader in engine.template_loaders:
                 try:
-                    template_string = loader.get_contents(self.template)
-                except AttributeError:  # Pre-1.9 compatibility
-                    template_string = loader.load_template_source(self.template)[0]
-                return template_string
-            except TemplateDoesNotExist:
-                pass
+                    try:
+                        template_string = loader.get_contents(self.template)
+                    except AttributeError:  # Pre-1.9 compatibility
+                        template_string = loader.load_template_source(self.template)[0]
+                    return template_string
+                except TemplateDoesNotExist:
+                    pass
+        else:
+            return Loader().load_template_source(self.template)[0]
         raise TemplateDoesNotExist(self.template)
 
     @staticmethod
