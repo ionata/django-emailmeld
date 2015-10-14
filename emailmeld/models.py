@@ -154,19 +154,19 @@ class EmailMeldBase(object):
     def get_template_string(self):
         """Use the same logic as django uses for getting a compiled template
             to get the contents"""
-        if Engine is not None:
-            engine = Engine.get_default()
-            for loader in engine.template_loaders:
-                try:
-                    try:
-                        template_string = loader.get_contents(self.template)
-                    except AttributeError:  # Pre-1.9 compatibility
-                        template_string = loader.load_template_source(self.template)[0]
-                    return template_string
-                except TemplateDoesNotExist:
-                    pass
-        else:
+        if Engine is None:
             return Loader().load_template_source(self.template)[0]
+
+        engine = Engine.get_default()
+        for loader in engine.template_loaders:
+            try:
+                try:
+                    template_string = loader.get_contents(self.template)
+                except AttributeError:  # Pre-1.9 compatibility
+                    template_string = loader.load_template_source(self.template)[0]
+                return template_string
+            except TemplateDoesNotExist:
+                pass
         raise TemplateDoesNotExist(self.template)
 
     @staticmethod
