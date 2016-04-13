@@ -146,7 +146,7 @@ class EmailMeldBase(object):
         # wrap the template in timezone aware tags
         template = u"{{% load {template_tags} %}}{{% timezone \"{timezone}\" %}}{body}{{% endtimezone %}}".format(
             template_tags=" ".join(self.template_tags),
-            body=self.meld.body,
+            body=template,
             timezone=self.timezone,
         )
 
