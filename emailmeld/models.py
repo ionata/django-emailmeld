@@ -155,11 +155,7 @@ class EmailMeldBase(object):
     def get_template_string(self):
         """Use the same logic as django uses for getting a compiled template
             to get the contents"""
-        if Engine is None:
-            return Loader().load_template_source(self.template)[0]
-
-        engine = Engine.get_default()
-        for loader in engine.template_loaders:
+        for loader in self.get_template_loaders():
             try:
                 try:
                     template_string = loader.get_contents(self.template)
@@ -168,7 +164,20 @@ class EmailMeldBase(object):
                 return template_string
             except TemplateDoesNotExist:
                 pass
+        # Raise if none of the loaders could find it
         raise TemplateDoesNotExist(self.template)
+
+    def get_template_loaders(self):
+        """Some loaders have nested loaders that are what we actually use."""
+        if Engine is None:
+            loader = Loader()
+            return getattr(loader, 'loaders', [loader])
+
+        engine = Engine.get_default()
+        loaders = []
+        for loader in engine.template_loaders:
+            loaders += getattr(loader, 'loaders', [loader])
+        return loaders
 
     @staticmethod
     def partition_template_string(template_string):
