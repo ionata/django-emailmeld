@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='django-emailmeld',
-    version='0.0.5',
+    version='0.0.6',
     description='Django Email Templater.',
     long_description = open( 'README.md', 'r').read() + open('AUTHORS.rst', 'r').read() + open('CHANGELOG.rst', 'r').read(),
     author='Thomas',
